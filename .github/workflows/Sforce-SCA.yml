@@ -2,12 +2,13 @@
 name: Salesforce Static Code Analysis
 
 # Definition when the workflow should run
-on:
-  push:
-    branches:
-      - main
-      - development
-
+    pull_request:
+      types: [opened, reopened, edited, synchronize]
+      branches: 
+        - main
+      paths:
+        - 'force-app/**'
+        
 # Jobs to be executed
 jobs:
   static-code-analysis:
