@@ -1,6 +1,5 @@
 name: Salesforce Static Code Analysis
 
-#Definition when the workflow should run
     pull_request:
       types: [opened, reopened, edited, synchronize]
       branches: 
@@ -8,7 +7,6 @@ name: Salesforce Static Code Analysis
       paths:
         - 'force-app/**'
         
-#Jobs to be executed
 jobs:
   static-code-analysis:
     runs-on: ubuntu-latest
@@ -19,7 +17,7 @@ jobs:
       with:
           fetch-depth: 0
 
-#Store secret for PRODUCTION Org
+
     - name: 'Populate auth file with SFDX_URL secret of the PROD'
       shell: bash
       run: |
@@ -30,7 +28,7 @@ jobs:
           mkdir changed-sources
           sfdx sgd:source:delta --to "HEAD" --from "HEAD^" --output changed-sources/ --generate-delta --source force-app/
 
- #Authenticate to org
+
     - name: 'Authenticate to PROD Org'
       run: sfdx auth:sfdxurl:store -f ./PROD_INSTANCE_URL.txt -s -a dev
 
