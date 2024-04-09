@@ -1,4 +1,3 @@
-# Unique name for this workflow
 name: Salesforce Static Code Analysis
 
 # Definition when the workflow should run
