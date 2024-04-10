@@ -1,97 +1,47 @@
-# This is a basic workflow that is triggered by a pull request to a branch ‘main’
-# This workflow utilizes acu-pack to create a delta package containing only what was changed
-# If feature Feature branch is merged into TRAGET_BRANCH then Salesforce deployment will run
-# Update the TARGET_BRANCH to the branch you want feature branches to be merged into
-# Update the SOURCE_DIR to the directory you want acu-pack to create a delta package from
+name: PMD APEX Code Analysis
 
-name: Validate Pull Request to main
-
-on: 
-  pull_request:
-    types:
-    - opened
-    - synchronize
+on:
+  push:
     branches:
-      - main # Git branch(es) that trigger workflow 
-    paths:
-      - 'force-app/**'
-  
-env:
-  SF_AUDIENCE_URL: https://test.salesforce.com # Use https://login.salesforce.com for production instances. Use https://test.salesforce.com for sandboxes
-  SALESFORCE_ORG_URL: https://test.salesforce.com # Salesforce URL of target org
-  SALESFORCE_ORG_USERNAME: ${{secrets.GDIUAT2_BUILD_USER}}
-  TEST_LEVEL: 'NoTestRun'
-  SOURCE_DIR: force-app
-  HOME: /root
-  TARGET_BRANCH: main
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
 
 jobs:
-  deploy:
+  pmd_analysis:
+    name: Run PMD Analysis
     runs-on: ubuntu-latest
-    container:
-      image: jorgesolebur/salesforce-ci:latest
 
     steps:
-
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Adding GitHub Workspace as safe directory # Needed to setup Git user
-        run: |
-          git config --global --add safe.directory $GITHUB_WORKSPACE
-          git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
-          git fetch --all
-          git checkout ${{ github.BASE_REF }}
-          git checkout ${{ github.HEAD_REF }}
-          
-      - name: Setup Git User
-        shell: bash
-        run: |
-          git config user.name "GitHub Actions Bot"
-          git config user.email "<>"
-          
-      - name: Update CLI
-        run: |
-          npm update --global sfdx-cli
-          echo y | sfdx plugins:install @salesforce/acu-pack
-          sfdx --version
-          
-      - name: Authenticate Salesforce Org # Authenticates Salesforce org utilizing JWT Bearer Flow
+    - name: Checkout Repository
+      uses: actions/checkout@v2
       
-        run: |
-          echo ${{ secrets.SCA }} > authURLFile
-          sfdx auth:sfdxurl:store -f authURLFile -s -a PROD
-
-      - name: Find Merge Base
-        id: merge_base
-        run: |
-          echo "Finding merge base commit..."
-          echo $(git merge-base ${{ github.HEAD_REF }} ${{ github.BASE_REF }})
-
-      - name: Generate Deploy folder # Generates delta package utilizing acu-pack by comparing current git commit with the previous git commit
-        shell: bash
-        run: |
-          git --no-pager diff --name-status $(git merge-base ${{ github.HEAD_REF }} ${{ github.BASE_REF }}) origin/${{ github.HEAD_REF }} > git_diff.txt
-          cat git_diff.txt
-          sfdx acu-pack:source:delta:git -g git_diff.txt -s ${SOURCE_DIR} -d deploy
-          
-      - name: Validate deploy Package to Target Org # Validate Salesforce components in delta package to target org
-        shell: bash
-        run: |
-          sfdx force:source:deploy -p deploy -u "${SALESFORCE_ORG_USERNAME}" -c -g --verbose
-
-    - name: Install PMD
+    - name: Setup JDK 11
+      uses: actions/setup-java@v2
+      with:
+        distribution: 'adopt'
+        java-version: '11'
+    
+- name: Install PMD
       run: |
         wget https://github.com/pmd/pmd/releases/download/pmd_releases%2F6.50.0/pmd-bin-6.50.0.zip
         unzip pmd-bin-6.50.0.zip
         export PATH=$PATH:pmd-bin-6.50.0/bin/
 
-    - name: Run PMD static code analysis
+#    - name: Download PMD
+ #     run: |
+   #     wget https://github.com/pmd/pmd/releases/download/pmd_releases%2F6.42.0/pmd-bin-6.42.0.zip
+     #   unzip pmd-bin-6.42.0.zip
+    
+    - name: Run PMD Analysis
       run: |
-        pmd-bin-6.50.0/bin/run.sh pmd -d changed-sources/force-app -f xml -R rulesets/apex.xml -l apex -r pmd-report.xml
+        java -cp "pmd-bin-6.50.0/lib/*" net.sourceforge.pmd.PMD -d force-app/main/default/classes -R rulesets/apex/*.xml -reportfile pmd-report.txt
 
-    - name: Upload PMD report
+    - name: Upload PMD Report
       uses: actions/upload-artifact@v2
       with:
         name: pmd-report
-        path: pmd-report.xml
+        path: pmd-report.txt
