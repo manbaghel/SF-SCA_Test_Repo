@@ -52,7 +52,7 @@ jobs:
       - name: Replaces placeholders in the files with the property file variable values from the right environment
         run: |
           export HOME=/root
-          ant prepare -Dsf.env=QA
+          ant prepare -Dsf.env=Production
 
       # Runs PMD ruleset. This task will fail if there is any rule that is violated. We need to update ~/.sfdx-scanner/Config.json to make sure PMD scans as well -meta.xml files
       # We have defined custom Apex rules and custom XML Metadata rules that we should add as rules in PMD scanner by running scanner:rule:add
