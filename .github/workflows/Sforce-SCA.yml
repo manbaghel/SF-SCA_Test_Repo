@@ -1,123 +1,58 @@
-# This is a basic workflow to help you get started with Actions
-name: VALIDATE_PULL_REQUEST
+# Unique name for this workflow
+name: Salesforce Static Code Analysis
 
-# Controls when the action will run.
-on:
-  # Triggers the workflow on push or pull request events but only for the develop branch
-  pull_request:
-    types: [opened, synchronize, reopened]
-    branches: [main]
-
-  # Allows you to run this workflow manually from the Actions tab
-  workflow_dispatch:
-
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+# Definition when the workflow should run
+    pull_request:
+      types: [opened, reopened, edited, synchronize]
+      branches: 
+        - main
+      paths:
+        - 'force-app/**'
+        
+# Jobs to be executed
 jobs:
-  # This workflow contains a single job called "build"
-  VALIDATE_DELTA_PR:
-    # The type of runner that the job will run on
+  static-code-analysis:
     runs-on: ubuntu-latest
-    container:
-      image: jorgesolebur/salesforce-ci:latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
+    
     steps:
-      - uses: actions/checkout@v3
+    - name: Checkout code
+      uses: actions/checkout@v2
+      with:
+          fetch-depth: 0
 
-      # Checkout from GIT. We checkout both HEAD and BASE branches to generate DELTA
-      # git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
-      - name: Checkout from GIT. We checkout both HEAD and BASE branches to generate DELTA
-        run: |
-          export HOME=/root
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
-          git fetch --all
-          git checkout ${{ github.BASE_REF }}
-          git checkout ${{ github.HEAD_REF }}
+# Store secret for QA Org
+    - name: 'Populate auth file with SFDX_URL secret of the PROD'
+      shell: bash
+      run: |
+          echo ${{ secrets.SCA}} > ./SCA.txt
 
-      # Run SFDX GIT and creates delta
-      - name: Run sfdx git delta and creates delta
-        run: |
-          export HOME=/root
-          mkdir force-app-delta
-          pwsh -c 'sfdx sgd:source:delta --to ${{ github.HEAD_REF }} --from $(git merge-base ${{ github.HEAD_REF }} ${{ github.BASE_REF }}) -s force-app --generate-delta --output ./force-app-delta/'
-      - name: Show package to deploy
-        run: |
-          cat force-app-delta/package/package.xml
-      - name: Show package to destroy
-        run: |
-          cat force-app-delta/destructiveChanges/destructiveChanges.xml
+    - name: 'Create delta packages for new, modified or deleted metadata'
+      run: | 
+          mkdir changed-sources
+          sfdx sgd:source:delta --to "HEAD" --from "HEAD^" --output changed-sources/ --generate-delta --source force-app/
 
-      # Replaces placeholders in the metadata with the value from the property file for the right environment and creates folder /deploy with all the components with replaced placeholders. The folder /force-app contains same as /deploy
-      - name: Replaces placeholders in the files with the property file variable values from the right environment
-        run: |
-          export HOME=/root
-          ant prepare -Dsf.env=Production
+ # Authenticate to org
+    - name: 'Authenticate to PROD Org'
+      run: sfdx auth:sfdxurl:store -f ./SCA.txt -s -a dev
 
-      # Runs PMD ruleset. This task will fail if there is any rule that is violated. We need to update ~/.sfdx-scanner/Config.json to make sure PMD scans as well -meta.xml files
-      # We have defined custom Apex rules and custom XML Metadata rules that we should add as rules in PMD scanner by running scanner:rule:add
-      # Pending command to be used: sed -i -e 's+"!\*\*/\*-meta.xml"+"\*\*/\*-meta.xml"+g' ~/.sfdx-scanner/Config.json
-      - name: Apex Code + Metadata Best Practices scanning using PMD. This step will FAIL if there is any critical coding standards not met
-        run: |
-          export HOME=/root
-          sfdx scanner:rule:add --language xml --path "./scripts/pmd/category/xml/xml_custom_rules.xml"
-          sfdx scanner:rule:add --language apex --path "./scripts/pmd/category/apex/apex_custom_rules.xml"
-          echo "List of custom and standard rules used for NCS : "
-          sfdx scanner:rule:list
-          sed -i -e 's+"!\*\*/\*-meta.xml"+"\*\*/\*-meta.xml"+g' ~/.sfdx-scanner/Config.json
-          echo "Executing PMD Scan now : "
-          pwsh -c 'sfdx scanner:run  --target "./force-app/" --pmdconfig “./scripts/pmd/rulesets/critical_scan.xml” --severity-threshold "1" --engine "pmd"'
-
-      # Runs Flow Scan. This task will fail if there is any rule that is violated
-      # We should accept flow scanner because it is not trusted by default
-      - name: Salesforce Flow Scan. This step will FAIL if there is any critical violation of governor limits hitted in Flows
-        run: |
-          export HOME=/root
-          pwsh -c 'sfdx flow:scan -d "./force-app/"'
-
-      # Runs ESLint rules. This task will fail if there is any rule that is violated.
-      - name: LWC Best Practices scanning using ESLint. This step will FAIL if there is any critical coding standards not met
-        run: |
-          export HOME=/root
-          pwsh -c 'npm dedupe'
-          echo "Executing ESLint Scan now : " 
-          pwsh -c 'sfdx scanner:run  --target "./force-app/**/*.js" --eslintconfig "./scripts/eslint/.eslintrc.json" --severity-threshold "1" --engine "eslint-lwc"'
-
-      #Authentication to Target org
-      - name: Write the token into a file and authenticate to Target Org
-        run: |
-          export HOME=/root 
-          echo ${{ secrets.SCA }} > token.txt         
-          sfdx force:auth:sfdxurl:store -f token.txt -a SCA-Trial_Prod_Org -s
-
-      # Delta Validation to target Org. If changes are related with Apex classes or flows then we execute test classes. Errors are inside the JSON node "result.details.componentFailures" for component failure
-      - name: Delta Validation to target Org. If changes are related with Apex classes or flows then we execute test classes. Errors are inside the JSON node "result.details.componentFailures" for component failure
-        run: |
-          export HOME=/root
-          if [ $(cat force-app-delta/package/package.xml | wc -l) -gt 4 ];then
-            if [ $(egrep 'name>ApexClass|name>Apextrigger|name>Flow' force-app-delta/package/package.xml | wc -l) -gt 1 ];then
-              echo "Deploying Delta and not running Apex tests"
-              sfdx force:source:deploy --ignorewarnings --manifest "./force-app-delta/package/package.xml" -l NoTestRun -w 100 --checkonly -u myOrg --json
-            else 
-              echo "Deploying Delta and Runing all Local Tests since this changes introduces updates in Apex Classes and Flows"
-              sfdx force:source:deploy --ignorewarnings --manifest "./force-app-delta/package/package.xml" -l RunLocalTests -w 100 --checkonly -u myOrg --json
-            fi
-            if [ $? -ne 0 ]; then
-              echo "SF - deployment Failed"
-              exit 1
-            fi   
-          else
-                echo "No SF changes found. Deployment skipped"
+    - name: 'Validate delta changes from main branch in PROD org'
+      run: |
+          if [ -d changed-sources/force-app ]; then
+          sfdx force:source:deploy -p "changed-sources/force-app" --checkonly --testlevel RunLocalTests
           fi
+      
+    - name: Install PMD
+      run: |
+        wget https://github.com/pmd/pmd/releases/download/pmd_releases%2F6.50.0/pmd-bin-6.50.0.zip
+        unzip pmd-bin-6.50.0.zip
+        export PATH=$PATH:pmd-bin-6.50.0/bin/
 
-      # Delta Validation to target Org
-      - name: Delta Validation to target Org + Destructive changes without running test classes. If this step FAILS job is still success
-        continue-on-error: true
-        run: |
-          export HOME=/root
-          if grep -q '<types>' ./force-app-delta/destructiveChanges/destructiveChanges.xml ; then
-             echo "Removing the below components: \n `cat force-app-delta/destructiveChanges/destructiveChanges.xml`"
-             sfdx force:source:deploy --ignorewarnings --manifest  "./force-app-delta/package/package.xml" --postdestructivechanges "./force-app-delta/destructiveChanges/destructiveChanges.xml" -l NoTestRun -w 100 -c -u myOrg --json
-          else
-             echo "No destructive changes found"
-          fi
+    - name: Run PMD static code analysis
+      run: |
+        pmd-bin-6.50.0/bin/run.sh pmd -d changed-sources/force-app -f xml -R rulesets/apex.xml -l apex -r pmd-report.xml
+
+    - name: Upload PMD report
+      uses: actions/upload-artifact@v2
+      with:
+        name: pmd-report
+        path: pmd-report.xml
